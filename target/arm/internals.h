@@ -1670,6 +1670,29 @@ static inline bool canonical_tagging_enabled(CPUARMState *env, bool selector)
     return extract64(tcr, mtx_bit, 1);
 }
 
+/* Return true if Canonical Tagging is enabled. */
+static inline bool canonical_tagging_enabled(CPUARMState *env, bool selector)
+{
+    int mmu_idx;
+    uint64_t tcr, mtx_bit;
+
+    /* If mte4 is not implemented, then mtx is by definition not enabled */
+    if (!cpu_isar_feature(aa64_mte_mtx, env_archcpu(env))) {
+        return false;
+    }
+
+    mmu_idx = arm_mmu_idx_el(env, arm_current_el(env));
+    tcr = regime_tcr(env, mmu_idx);
+
+    /*
+     * In two-range regimes, mtx is governed by bit 60 or 61 of TCR, and in
+     * one-range regimes, bit 33 is used.
+     */
+    mtx_bit = regime_has_2_ranges(mmu_idx) ? 60 + selector : 33;
+
+    return extract64(tcr, mtx_bit, 1);
+}
+
 /*
  * For TBI, ideally, we would do nothing.  Proper behaviour on fault is
  * for the tag to be present in the FAR_ELx register.  But for user-only
