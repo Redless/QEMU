@@ -226,6 +226,20 @@ uint8_t *allocation_tag_mem_probe(CPUARMState *env, int ptr_mmu_idx,
 #endif
 }
 
+static void canonical_tag_write_fail(CPUARMState *env,
+                                uint64_t dirty_ptr, uintptr_t ra)
+{
+    uint64_t syn;
+
+    env->exception.vaddress = dirty_ptr;
+
+    syn = syn_data_abort_no_iss(arm_current_el(env) != 0, 0, 0, 0, 0, 1, 0);
+    syn |= BIT_ULL(42); /* TnD is bit 42 */
+
+    raise_exception_ra(env, EXCP_DATA_ABORT, syn, exception_target_el(env), ra);
+    g_assert_not_reached();
+}
+
 static uint8_t *allocation_tag_mem(CPUARMState *env, int ptr_mmu_idx,
                                    uint64_t ptr, MMUAccessType ptr_access,
                                    int ptr_size, MMUAccessType tag_access,
@@ -371,6 +385,11 @@ static inline void do_stg(CPUARMState *env, uint64_t ptr, uint64_t xt,
     mem = allocation_tag_mem(env, mmu_idx, ptr, MMU_DATA_STORE, TAG_GRANULE,
                              MMU_DATA_STORE, ra);
 
+    if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
+        canonical_tag_write_fail(env, ptr, ra);
+        return;
+    }
+
     /* Store if page supports tags. */
     if (mem) {
         store1(ptr, mem, allocation_tag_from_addr(xt));
@@ -394,6 +413,11 @@ void HELPER(stg_stub)(CPUARMState *env, uint64_t ptr)
 
     check_tag_aligned(env, ptr, ra);
     probe_write(env, ptr, TAG_GRANULE, mmu_idx, ra);
+
+    if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
+        canonical_tag_write_fail(env, ptr, ra);
+        return;
+    }
 }
 
 static inline void do_st2g(CPUARMState *env, uint64_t ptr, uint64_t xt,
@@ -417,6 +441,11 @@ static inline void do_st2g(CPUARMState *env, uint64_t ptr, uint64_t xt,
                                   MMU_DATA_STORE, TAG_GRANULE,
                                   MMU_DATA_STORE, ra);
 
+        if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
+            canonical_tag_write_fail(env, ptr, ra);
+            return;
+        }
+
         /* Store if page(s) support tags. */
         if (mem1) {
             store1(TAG_GRANULE, mem1, tag);
@@ -428,6 +457,12 @@ static inline void do_st2g(CPUARMState *env, uint64_t ptr, uint64_t xt,
         /* Two stores aligned mod TAG_GRANULE*2 -- modify one byte. */
         mem1 = allocation_tag_mem(env, mmu_idx, ptr, MMU_DATA_STORE,
                                   2 * TAG_GRANULE, MMU_DATA_STORE, ra);
+
+        if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
+            canonical_tag_write_fail(env, ptr, ra);
+            return;
+        }
+
         if (mem1) {
             tag |= tag << 4;
             qatomic_set(mem1, tag);
@@ -458,6 +493,11 @@ void HELPER(st2g_stub)(CPUARMState *env, uint64_t ptr)
     } else {
         probe_write(env, ptr, TAG_GRANULE, mmu_idx, ra);
         probe_write(env, ptr + TAG_GRANULE, TAG_GRANULE, mmu_idx, ra);
+    }
+
+    if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
+        canonical_tag_write_fail(env, ptr, ra);
+        return;
     }
 }
 
@@ -575,6 +615,11 @@ void HELPER(stgm)(CPUARMState *env, uint64_t ptr, uint64_t val)
         return;
     }
 
+    if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
+        canonical_tag_write_fail(env, ptr, ra);
+        return;
+    }
+
     /* See LDGM for comments on BS and on shift.  */
     shift = extract64(ptr, LOG2_TAG_GRANULE, 4) * 4;
     val >>= shift;
@@ -622,6 +667,12 @@ void HELPER(stzgm_tags)(CPUARMState *env, uint64_t ptr, uint64_t val)
 
     mem = allocation_tag_mem(env, mmu_idx, ptr, MMU_DATA_STORE, dcz_bytes,
                              MMU_DATA_STORE, ra);
+
+    if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
+        canonical_tag_write_fail(env, ptr, ra);
+        return;
+    }
+
     if (mem) {
         int tag_pair = (val & 0xf) * 0x11;
         memset(mem, tag_pair, tag_bytes);
