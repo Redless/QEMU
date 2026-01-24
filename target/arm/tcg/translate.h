@@ -142,6 +142,8 @@ typedef struct DisasContext {
     bool mte_active[2];
     /* True if v8.5-MTE tag checks disabled for reads; index with is_unpriv. */
     bool mte_store_only[2];
+    /* Should this be 1 or 2 long? Do not commit without figuring this out. */
+    uint8_t mtx;
     /* True with v8.5-BTI and SCTLR_ELx.BT* set.  */
     bool bt;
     /* True if any CP15 access is trapped by HSTR_EL2 */
