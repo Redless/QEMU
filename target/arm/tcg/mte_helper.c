@@ -383,15 +383,14 @@ static inline void do_stg(CPUARMState *env, uint64_t ptr, uint64_t xt,
     mem = allocation_tag_mem(env, mmu_idx, ptr, MMU_DATA_STORE, TAG_GRANULE,
                              MMU_DATA_STORE, ra);
 
-    if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
+    /* Store if page supports tags. */
+    if (mem) {
+        store1(ptr, mem, allocation_tag_from_addr(xt));
+    } else if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
         canonical_tag_write_fail(env, ptr, ra);
         return;
     }
 
-    /* Store if page supports tags. */
-    if (mem) {
-        store1(ptr, mem, allocation_tag_from_addr(xt));
-    }
 }
 
 void HELPER(stg)(CPUARMState *env, uint64_t ptr, uint64_t xt)
@@ -408,13 +407,18 @@ void HELPER(stg_stub)(CPUARMState *env, uint64_t ptr)
 {
     int mmu_idx = arm_env_mmu_index(env);
     uintptr_t ra = GETPC();
+    uint8_t *mem;
 
     check_tag_aligned(env, ptr, ra);
     probe_write(env, ptr, TAG_GRANULE, mmu_idx, ra);
 
+    /* If we are storing to a canonically tagged memory region, fault. */
     if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
-        canonical_tag_write_fail(env, ptr, ra);
-        return;
+        mem = allocation_tag_mem_probe(env, mmu_idx, ptr, MMU_DATA_STORE,
+                                       TAG_GRANULE, MMU_DATA_STORE, true, ra);
+        if (!mem) {
+            canonical_tag_write_fail(env, ptr, ra);
+        }
     }
 }
 
@@ -439,7 +443,7 @@ static inline void do_st2g(CPUARMState *env, uint64_t ptr, uint64_t xt,
                                   MMU_DATA_STORE, TAG_GRANULE,
                                   MMU_DATA_STORE, ra);
 
-        if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
+        if (!(mem1 || mem2) && canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
             canonical_tag_write_fail(env, ptr, ra);
             return;
         }
@@ -456,7 +460,7 @@ static inline void do_st2g(CPUARMState *env, uint64_t ptr, uint64_t xt,
         mem1 = allocation_tag_mem(env, mmu_idx, ptr, MMU_DATA_STORE,
                                   2 * TAG_GRANULE, MMU_DATA_STORE, ra);
 
-        if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
+        if (!mem1 && canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
             canonical_tag_write_fail(env, ptr, ra);
             return;
         }
@@ -483,6 +487,7 @@ void HELPER(st2g_stub)(CPUARMState *env, uint64_t ptr)
     int mmu_idx = arm_env_mmu_index(env);
     uintptr_t ra = GETPC();
     int in_page = -(ptr | TARGET_PAGE_MASK);
+    uint8_t *mem1, *mem2;
 
     check_tag_aligned(env, ptr, ra);
 
@@ -493,10 +498,27 @@ void HELPER(st2g_stub)(CPUARMState *env, uint64_t ptr)
         probe_write(env, ptr + TAG_GRANULE, TAG_GRANULE, mmu_idx, ra);
     }
 
+    /* If we are storing to a canonically tagged memory region, fault. */
     if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
-        canonical_tag_write_fail(env, ptr, ra);
-        return;
+        if (likely(in_page >= 2 * TAG_GRANULE)) {
+            mem1 = allocation_tag_mem_probe(env, mmu_idx, ptr, MMU_DATA_STORE,
+                                           2 * TAG_GRANULE, MMU_DATA_STORE,
+                                           true, ra);
+            mem2 = (uint8_t*) 0;
+        } else {
+            mem1 = allocation_tag_mem_probe(env, mmu_idx, ptr, MMU_DATA_STORE,
+                                           TAG_GRANULE, MMU_DATA_STORE,
+                                           true, ra);
+            mem2 = allocation_tag_mem_probe(env, mmu_idx,
+                                                  ptr + TAG_GRANULE,
+                                                  MMU_DATA_STORE, TAG_GRANULE,
+                                                  MMU_DATA_STORE, true, ra);
+        }
+        if (!(mem1 || mem2)) {
+            canonical_tag_write_fail(env, ptr, ra);
+        }
     }
+
 }
 
 uint64_t HELPER(ldgm)(CPUARMState *env, uint64_t ptr)
@@ -609,11 +631,11 @@ void HELPER(stgm)(CPUARMState *env, uint64_t ptr, uint64_t val)
      * and if the OS has enabled access to the tags.
      */
     if (!tag_mem) {
-        return;
-    }
-
-    if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
-        canonical_tag_write_fail(env, ptr, ra);
+        /* If untagged memory region + mtx, canonical tcf. */
+        if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
+            canonical_tag_write_fail(env, ptr, ra);
+            return;
+        }
         return;
     }
 
@@ -665,14 +687,12 @@ void HELPER(stzgm_tags)(CPUARMState *env, uint64_t ptr, uint64_t val)
     mem = allocation_tag_mem(env, mmu_idx, ptr, MMU_DATA_STORE, dcz_bytes,
                              MMU_DATA_STORE, ra);
 
-    if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
-        canonical_tag_write_fail(env, ptr, ra);
-        return;
-    }
-
     if (mem) {
         int tag_pair = (val & 0xf) * 0x11;
         memset(mem, tag_pair, tag_bytes);
+    } else if (canonical_tagging_enabled(env, 1 & (ptr >> 55))) {
+        canonical_tag_write_fail(env, ptr, ra);
+        return;
     }
 }
 
