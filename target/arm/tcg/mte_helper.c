@@ -319,14 +319,6 @@ uint64_t HELPER(ldg)(CPUARMState *env, uint64_t ptr, uint64_t xt)
     uint8_t *mem;
     int rtag = 0;
 
-    /* Load canonical value if MTX is set. */
-    if (cpu_isar_feature(aa64_mte_mtx, env_archcpu(env))) {
-        uint64_t bit55 = extract64(ptr, 55, 1);
-        if (canonical_tagging_enabled(env, bit55)) {
-            return address_with_allocation_tag(xt, 0xF * bit55);
-        }
-    }
-
     /* Trap if accessing an invalid page.  */
     mem = allocation_tag_mem(env, mmu_idx, ptr, MMU_DATA_LOAD, 1,
                              MMU_DATA_LOAD, GETPC());
@@ -334,7 +326,13 @@ uint64_t HELPER(ldg)(CPUARMState *env, uint64_t ptr, uint64_t xt)
     /* Load if page supports tags. */
     if (mem) {
         rtag = load_tag1(ptr, mem);
+    } else {
+        uint64_t bit55 = extract64(ptr, 55, 1);
+        if (canonical_tagging_enabled(env, bit55)) {
+            rtag = 0xF * bit55;
+        }
     }
+
 
     return address_with_allocation_tag(xt, rtag);
 }
@@ -515,41 +513,40 @@ uint64_t HELPER(ldgm)(CPUARMState *env, uint64_t ptr)
     ptr = QEMU_ALIGN_DOWN(ptr, gm_bs_bytes);
     bit55 = extract64(ptr, 55, 1);
 
-    /* Load canonical value if mtx is set */
-    if (canonical_tagging_enabled(env, bit55)) {
-        switch (gm_bs) {
-        case 3:
-            /* 32 bytes -> 2 tags -> 8 result bits */
-            ret = -(uint8_t)bit55;
-            break;
-        case 4:
-            /* 64 bytes -> 4 tags -> 16 result bits */
-            ret = -(uint16_t)bit55;
-            break;
-        case 5:
-            /* 128 bytes -> 8 tags -> 32 result bits */
-            ret = -(uint32_t)bit55;
-            break;
-        case 6:
-            /* 256 bytes -> 16 tags -> 64 result bits */
-            return -(uint64_t)bit55;
-        default:
-            /*
-             * CPU configured with unsupported/invalid gm blocksize.
-             * This is detected early in arm_cpu_realizefn.
-             */
-            g_assert_not_reached();
-        }
-        shift = extract64(ptr, LOG2_TAG_GRANULE, 4) * 4;
-        return ret << shift;
-    }
-
     /* Trap if accessing an invalid page.  */
     tag_mem = allocation_tag_mem(env, mmu_idx, ptr, MMU_DATA_LOAD,
                                  gm_bs_bytes, MMU_DATA_LOAD, ra);
 
     /* The tag is squashed to zero if the page does not support tags.  */
     if (!tag_mem) {
+        /* Load canonical value if mtx is set (untagged memory region) */
+        if (canonical_tagging_enabled(env, bit55)) {
+            switch (gm_bs) {
+            case 3:
+                /* 32 bytes -> 2 tags -> 8 result bits */
+                ret = -(uint8_t)bit55;
+                break;
+            case 4:
+                /* 64 bytes -> 4 tags -> 16 result bits */
+                ret = -(uint16_t)bit55;
+                break;
+            case 5:
+                /* 128 bytes -> 8 tags -> 32 result bits */
+                ret = -(uint32_t)bit55;
+                break;
+            case 6:
+                /* 256 bytes -> 16 tags -> 64 result bits */
+                return -(uint64_t)bit55;
+            default:
+                /*
+                 * CPU configured with unsupported/invalid gm blocksize.
+                 * This is detected early in arm_cpu_realizefn.
+                 */
+                g_assert_not_reached();
+            }
+            shift = extract64(ptr, LOG2_TAG_GRANULE, 4) * 4;
+            return ret << shift;
+        }
         return 0;
     }
 
