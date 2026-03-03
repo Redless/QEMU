@@ -939,14 +939,6 @@ static int mte_probe_int(CPUARMState *env, uint32_t desc, uint64_t ptr,
         return 1;
     }
 
-    /*
-     * If mtx is enabled, then the access is MemTag_CanonicallyTagged,
-     * otherwise it is MemTag_AllocationTagged. See AArch64.CheckTag.
-     */
-    if (mtx_check(desc, bit55)) {
-        return tag_is_canonical(ptr_tag, bit55);
-    }
-
     mmu_idx = FIELD_EX32(desc, MTEDESC, MIDX);
     type = FIELD_EX32(desc, MTEDESC, WRITE) ? MMU_DATA_STORE : MMU_DATA_LOAD;
     sizem1 = FIELD_EX32(desc, MTEDESC, SIZEM1);
@@ -968,6 +960,13 @@ static int mte_probe_int(CPUARMState *env, uint32_t desc, uint64_t ptr,
         mem1 = allocation_tag_mem(env, mmu_idx, ptr, type, sizem1 + 1,
                                   MMU_DATA_LOAD, ra);
         if (!mem1) {
+            /*
+             * If mtx is enabled, then the access is MemTag_CanonicallyTagged,
+             * otherwise it is MemTag_AllocationTagged. See AArch64.CheckTag.
+             */
+            if (mtx_check(desc, bit55)) {
+                return tag_is_canonical(ptr_tag, bit55);
+            }
             return 1;
         }
         /* Perform all of the comparisons. */
@@ -980,6 +979,12 @@ static int mte_probe_int(CPUARMState *env, uint32_t desc, uint64_t ptr,
         mem2 = allocation_tag_mem(env, mmu_idx, next_page, type,
                                   ptr_last - next_page + 1,
                                   MMU_DATA_LOAD, ra);
+
+        /* If either region is canonically tagged, do a canonical tag check */
+        if (mtx_check(desc, bit55) && (!mem1 || !mem2)
+            && (!tag_is_canonical(ptr_tag, bit55))) {
+            return 0;
+        }
 
         /*
          * Perform all of the comparisons.
