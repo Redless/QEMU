@@ -318,7 +318,7 @@ int load_tag1(uint64_t ptr, uint8_t *mem)
     return extract32(*mem, ofs, 4);
 }
 
-uint64_t HELPER(ldg)(CPUARMState *env, uint64_t ptr, uint64_t xt)
+uint64_t HELPER(ldg)(CPUARMState *env, uint64_t ptr, uint64_t xt, uint32_t canonical)
 {
     int mmu_idx = arm_env_mmu_index(env);
     uint8_t *mem;
@@ -333,7 +333,7 @@ uint64_t HELPER(ldg)(CPUARMState *env, uint64_t ptr, uint64_t xt)
         rtag = load_tag1(ptr, mem);
     } else {
         uint64_t bit55 = extract64(ptr, 55, 1);
-        if (canonical_tagging_enabled(env, bit55)) {
+        if (canonical) {
             rtag = 0xF * bit55;
         }
     }
@@ -488,7 +488,7 @@ void HELPER(st2g_stub)(CPUARMState *env, uint64_t ptr)
     }
 }
 
-uint64_t HELPER(ldgm)(CPUARMState *env, uint64_t ptr)
+uint64_t HELPER(ldgm)(CPUARMState *env, uint64_t ptr, uint32_t canonical)
 {
     int mmu_idx = arm_env_mmu_index(env);
     uintptr_t ra = GETPC();
@@ -509,7 +509,7 @@ uint64_t HELPER(ldgm)(CPUARMState *env, uint64_t ptr)
     /* The tag is squashed to zero if the page does not support tags.  */
     if (!tag_mem) {
         /* Load canonical value if mtx is set (untagged memory region) */
-        if (canonical_tagging_enabled(env, bit55)) {
+        if (canonical) {
             canonical_tag_val = -(uint64_t)bit55;
             switch (gm_bs) {
             case 3:
